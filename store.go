@@ -1,33 +1,36 @@
 package main
 
 import (
-	"code.google.com/p/goprotobuf/proto"
-	"encoding/binary"
 	"flag"
 	"fmt"
-	"github.com/henrikssn/stored/server"
-	"io"
+	"github.com/henrikssn/stored/endpoint"
 	"log"
 	"net"
 	"os"
 )
 
 var (
-	laddr       = flag.String("l", "127.0.0.1:8046", "The address to connect to.")
-	showVersion = flag.Bool("v", false, "print doozerd's version string")
+	addr        = flag.String("l", "127.0.0.1:8080", "The address to connect to.")
+	namespace   = flag.String("n", "default_namespace", "The namespace to use.")
+	group       = flag.String("g", "default_group", "The group to use.")
+	verbose     = flag.Bool("v", false, "Verbose print.")
+	showVersion = flag.Bool("V", false, "print store's version string")
 )
 
 func Usage() {
-	fmt.Fprintf(os.Stderr, "Usage: %s [OPTIONS]\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "Usage: %s [OPTIONS] [id] [store_data] \n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "\nOptions:\n")
 	flag.PrintDefaults()
 }
 
-var op = map[string]func([]string){
-	"get": get,
-	"put": put,
-	"nop": nop,
-}
+var (
+	op = map[string]func([]string){
+		"get": get,
+		"put": put,
+		"del": del,
+	}
+	client *endpoint.Client
+)
 
 var conn net.Conn
 
@@ -37,47 +40,41 @@ func main() {
 
 	args := flag.Args()
 
-	conn, _ = net.Dial("tcp", *laddr)
+	if len(args) < 2 {
+		Usage()
+		return
+	}
 
+	c, err := endpoint.NewClient("http://" + *addr)
+	if err != nil {
+		log.Printf("Could not create endpoint client: ", err)
+	}
+	client = c
 	op[args[0]](args[1:])
 
 }
 
 func get(args []string) {
-	tag := int64(42)
-	req := &server.Request{Tag: &tag, Op: server.Operation_GET.Enum(), Key: &args[0]}
-	write(req)
-	read()
+	resp, err := client.Get(endpoint.Key{*namespace, *group, args[0]})
+	if err != nil {
+		log.Printf("An error occured: ", err)
+	}
+	fmt.Println("HTTP " + client.Response.Status)
+	fmt.Printf("%s", resp)
 }
 
 func put(args []string) {
-	tag := int64(42)
-	req := &server.Request{Tag: &tag, Op: server.Operation_PUT.Enum(), Key: &args[0], Value: []byte(args[1])}
-	write(req)
-	read()
-}
-
-func nop(args []string) {
-}
-
-func read() *server.Response {
-	var size int32
-	binary.Read(conn, binary.BigEndian, &size)
-	buf := make([]byte, size)
-	_, err := io.ReadFull(conn, buf)
+	err := client.Put(endpoint.Key{*namespace, *group, args[0]}, []byte(args[1]))
 	if err != nil {
-		panic(err)
+		log.Printf("An error occured: ", err)
 	}
-
-	resp := new(server.Response)
-	proto.Unmarshal(buf, resp)
-	log.Println(resp)
-	return resp
+	fmt.Println("HTTP " + client.Response.Status)
 }
 
-func write(req *server.Request) {
-	data, _ := proto.Marshal(req)
-
-	binary.Write(conn, binary.BigEndian, int32(len(data)))
-	conn.Write(data)
+func del(args []string) {
+	err := client.Delete(endpoint.Key{*namespace, *group, args[0]})
+	if err != nil {
+		log.Printf("An error occured: ", err)
+	}
+	fmt.Println("HTTP " + client.Response.Status)
 }
